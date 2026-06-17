@@ -1,44 +1,26 @@
-import os
-import secrets
-import json
-from datetime import datetime
-from flask import Flask, render_template, request, redirect, url_for, session, send_file, flash
-from werkzeug.utils import secure_filename
-from werkzeug.exceptions import RequestEntityTooLarge
+import logging
 from functools import wraps
-import bcrypt
+from flask import Flask, render_template, request, redirect, url_for, session, send_file, flash
+
+from config import Config
+from services import FileService, AuthService
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.secret_key = secrets.token_hex(32)
+Config.init_app(app)
 
-# Configuration
-UPLOAD_FOLDER = 'uploads'
-METADATA_FILE = 'file_metadata.json'
-MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
-
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
-
-# Default password (hashed)
-# Default password is "admin123"
-DEFAULT_PASSWORD_HASH = bcrypt.hashpw('admin123'.encode('utf-8'), bcrypt.gensalt())
-
-def load_metadata():
-    metadata_path = os.path.join(app.root_path, METADATA_FILE)
-    if os.path.exists(metadata_path):
-        with open(metadata_path, 'r') as f:
-            return json.load(f)
-    return {}
-
-def save_metadata(metadata):
-    metadata_path = os.path.join(app.root_path, METADATA_FILE)
-    with open(metadata_path, 'w') as f:
-        json.dump(metadata, f, indent=2)
-
-def get_file_extension(filename):
-    return filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
+# Initialize services
+file_service = FileService(app.root_path)
+auth_service = AuthService()
 
 def login_required(f):
+    """Decorator to require login for routes."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if 'logged_in' not in session:
@@ -54,13 +36,16 @@ def index():
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    """Handle user login."""
     if request.method == 'POST':
         password = request.form.get('password')
-        if password and bcrypt.checkpw(password.encode('utf-8'), DEFAULT_PASSWORD_HASH):
+        if password and auth_service.verify_password(password):
             session['logged_in'] = True
+            logger.info('User logged in successfully')
             return redirect(url_for('dashboard'))
         else:
             flash('Invalid password', 'error')
+            logger.warning('Failed login attempt')
     return render_template('login.html')
 
 @app.route('/logout')
@@ -71,86 +56,47 @@ def logout():
 @app.route('/dashboard')
 @login_required
 def dashboard():
-    search_query = request.args.get('search', '').lower()
+    """Display file dashboard with search and sorting."""
+    search_query = request.args.get('search', '')
     sort_by = request.args.get('sort', 'name')
     sort_order = request.args.get('order', 'asc')
     
-    files = []
-    upload_folder = os.path.join(app.root_path, app.config['UPLOAD_FOLDER'])
-    metadata = load_metadata()
+    files = file_service.list_files(search_query, sort_by, sort_order)
     
-    if os.path.exists(upload_folder):
-        file_list = os.listdir(upload_folder)
-        for filename in file_list:
-            file_path = os.path.join(upload_folder, filename)
-            file_size = os.path.getsize(file_path)
-            file_ext = get_file_extension(filename)
-            upload_date = metadata.get(filename, {}).get('upload_date', '')
-            
-            # Search filter
-            if search_query and search_query not in filename.lower():
-                continue
-            
-            files.append({
-                'name': filename,
-                'size': file_size,
-                'extension': file_ext,
-                'upload_date': upload_date
-            })
-        
-        # Sort files
-        if sort_by == 'name':
-            files.sort(key=lambda x: x['name'], reverse=(sort_order == 'desc'))
-        elif sort_by == 'size':
-            files.sort(key=lambda x: x['size'], reverse=(sort_order == 'desc'))
-        elif sort_by == 'type':
-            files.sort(key=lambda x: x['extension'], reverse=(sort_order == 'desc'))
-        elif sort_by == 'date':
-            files.sort(key=lambda x: x['upload_date'] or '', reverse=(sort_order == 'desc'))
-    
-    return render_template('dashboard.html', files=files, search_query=search_query, sort_by=sort_by, sort_order=sort_order)
+    return render_template(
+        'dashboard.html',
+        files=files,
+        search_query=search_query,
+        sort_by=sort_by,
+        sort_order=sort_order
+    )
 
 @app.route('/upload', methods=['POST'])
 @login_required
 def upload_file():
-    try:
-        if 'file' not in request.files:
-            flash('No file selected', 'error')
-            return redirect(url_for('dashboard'))
-        
-        file = request.files['file']
-        if file.filename == '':
-            flash('No file selected', 'error')
-            return redirect(url_for('dashboard'))
-        
-        if file:
-            filename = secure_filename(file.filename)
-            upload_folder = os.path.join(app.root_path, app.config['UPLOAD_FOLDER'])
-            os.makedirs(upload_folder, exist_ok=True)
-            file.save(os.path.join(upload_folder, filename))
-            
-            # Save metadata
-            metadata = load_metadata()
-            metadata[filename] = {
-                'upload_date': datetime.now().isoformat()
-            }
-            save_metadata(metadata)
-            
-            flash(f'File "{filename}" uploaded successfully', 'success')
-        
+    """Handle file upload."""
+    if 'file' not in request.files:
+        flash('No file selected', 'error')
         return redirect(url_for('dashboard'))
-    except RequestEntityTooLarge:
-        flash(f'File too large. Maximum size is {MAX_FILE_SIZE / (1024*1024):.0f}MB', 'error')
-        return redirect(url_for('dashboard'))
+    
+    file = request.files['file']
+    success, message = file_service.upload_file(file)
+    
+    if success:
+        flash(message, 'success')
+    else:
+        flash(message, 'error')
+    
+    return redirect(url_for('dashboard'))
 
 @app.route('/download/<filename>')
 @login_required
 def download_file(filename):
-    filename = secure_filename(filename)
-    upload_folder = os.path.join(app.root_path, app.config['UPLOAD_FOLDER'])
-    file_path = os.path.join(upload_folder, filename)
+    """Handle file download."""
+    file_path = file_service.get_file_path(filename)
     
-    if os.path.exists(file_path):
+    if file_path:
+        logger.info(f'File downloaded: {filename}')
         return send_file(file_path, as_attachment=True)
     else:
         flash('File not found', 'error')
@@ -159,20 +105,13 @@ def download_file(filename):
 @app.route('/delete/<filename>')
 @login_required
 def delete_file(filename):
-    filename = secure_filename(filename)
-    upload_folder = os.path.join(app.root_path, app.config['UPLOAD_FOLDER'])
-    file_path = os.path.join(upload_folder, filename)
+    """Handle file deletion."""
+    success, message = file_service.delete_file(filename)
     
-    if os.path.exists(file_path):
-        os.remove(file_path)
-        # Remove metadata
-        metadata = load_metadata()
-        if filename in metadata:
-            del metadata[filename]
-            save_metadata(metadata)
-        flash(f'File "{filename}" deleted successfully', 'success')
+    if success:
+        flash(message, 'success')
     else:
-        flash('File not found', 'error')
+        flash(message, 'error')
     
     return redirect(url_for('dashboard'))
 
