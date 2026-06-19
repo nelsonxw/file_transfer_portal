@@ -92,14 +92,42 @@ def upload_file():
 @app.route('/download/<filename>')
 @login_required
 def download_file(filename):
-    """Handle file download."""
-    file_path = file_service.get_file_path(filename)
-    
-    if file_path:
-        logger.info(f'File downloaded: {filename}')
-        return send_file(file_path, as_attachment=True)
-    else:
-        flash('File not found', 'error')
+    """Handle file download from S3."""
+    try:
+        from werkzeug.utils import secure_filename
+        from botocore.exceptions import ClientError
+        
+        filename = secure_filename(filename)
+        
+        if not file_service.file_exists(filename):
+            flash('File not found', 'error')
+            return redirect(url_for('dashboard'))
+        
+        # Get file from S3
+        response = file_service.s3_client.get_object(
+            Bucket=file_service.bucket_name,
+            Key=filename
+        )
+        
+        # Stream the file content
+        file_stream = response['Body']
+        content_type = response.get('ContentType', 'application/octet-stream')
+        
+        logger.info(f'File downloaded from S3: {filename}')
+        return send_file(
+            file_stream,
+            as_attachment=True,
+            download_name=filename,
+            mimetype=content_type
+        )
+        
+    except ClientError as e:
+        logger.error(f'Error downloading file from S3: {e}')
+        flash('Error downloading file', 'error')
+        return redirect(url_for('dashboard'))
+    except Exception as e:
+        logger.error(f'Error downloading file: {e}')
+        flash('Error downloading file', 'error')
         return redirect(url_for('dashboard'))
 
 @app.route('/delete/<filename>')
