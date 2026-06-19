@@ -1,10 +1,12 @@
 import os
 import json
 import logging
+import bcrypt
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.datastructures import FileStorage
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
 
@@ -37,7 +39,7 @@ class FileService:
             logger.error(f"Failed to initialize S3 client: {e}")
             raise
     
-    def load_metadata(self) -> Dict:
+    def load_metadata(self) -> Dict[str, Dict]:
         """Load file metadata from JSON file."""
         try:
             if os.path.exists(self.metadata_path):
@@ -48,7 +50,7 @@ class FileService:
             logger.error(f"Error loading metadata: {e}")
             return {}
     
-    def save_metadata(self, metadata: Dict) -> bool:
+    def save_metadata(self, metadata: Dict[str, Dict]) -> bool:
         """Save file metadata to JSON file."""
         try:
             with open(self.metadata_path, 'w') as f:
@@ -67,14 +69,13 @@ class FileService:
         search_query: str = '', 
         sort_by: str = 'name', 
         sort_order: str = 'asc'
-    ) -> List[Dict]:
+    ) -> List[Dict[str, any]]:
         """List files with optional search and sorting."""
         files = []
+        metadata = self.load_metadata()
+        search_query = search_query.lower()
         
         try:
-            metadata = self.load_metadata()
-            search_query = search_query.lower()
-            
             # List objects from S3
             response = self.s3_client.list_objects_v2(Bucket=self.bucket_name)
             
@@ -96,14 +97,13 @@ class FileService:
                         'extension': file_ext,
                         'upload_date': upload_date
                     })
-            
-            # Sort files
-            sort_key = self._get_sort_key(sort_by)
-            if sort_key:
-                files.sort(key=sort_key, reverse=(sort_order == 'desc'))
-            
         except ClientError as e:
             logger.error(f"Error listing files from S3: {e}")
+        
+        # Sort files
+        sort_key = self._get_sort_key(sort_by)
+        if sort_key:
+            files.sort(key=sort_key, reverse=(sort_order == 'desc'))
         
         return files
     
@@ -117,7 +117,7 @@ class FileService:
         }
         return sort_keys.get(sort_by)
     
-    def upload_file(self, file) -> Tuple[bool, str]:
+    def upload_file(self, file: FileStorage) -> Tuple[bool, str]:
         """Upload a file to S3 and save metadata."""
         try:
             if not file or file.filename == '':
@@ -132,6 +132,7 @@ class FileService:
                 filename,
                 ExtraArgs={'ContentType': file.content_type}
             )
+            logger.info(f"File uploaded successfully to S3: {filename}")
             
             # Update metadata
             metadata = self.load_metadata()
@@ -140,7 +141,6 @@ class FileService:
             }
             self.save_metadata(metadata)
             
-            logger.info(f"File uploaded successfully to S3: {filename}")
             return True, f'File "{filename}" uploaded successfully'
             
         except RequestEntityTooLarge:
@@ -155,12 +155,28 @@ class FileService:
     
     def file_exists(self, filename: str) -> bool:
         """Check if a file exists in S3."""
+        filename = secure_filename(filename)
         try:
-            filename = secure_filename(filename)
             self.s3_client.head_object(Bucket=self.bucket_name, Key=filename)
             return True
         except ClientError:
             return False
+    
+    def download_file(self, filename: str) -> Tuple[bool, Optional[Any], str]:
+        """Download a file from S3 and return the file stream and content type."""
+        filename = secure_filename(filename)
+        try:
+            response = self.s3_client.get_object(
+                Bucket=self.bucket_name,
+                Key=filename
+            )
+            file_stream = response['Body']
+            content_type = response.get('ContentType', 'application/octet-stream')
+            logger.info(f'File downloaded from S3: {filename}')
+            return True, file_stream, content_type
+        except ClientError as e:
+            logger.error(f'Error downloading from S3: {e}')
+            return False, None, str(e)
     
     def delete_file(self, filename: str) -> Tuple[bool, str]:
         """Delete a file from S3 and its metadata."""
@@ -172,6 +188,7 @@ class FileService:
             
             # Delete file from S3
             self.s3_client.delete_object(Bucket=self.bucket_name, Key=filename)
+            logger.info(f"File deleted successfully from S3: {filename}")
             
             # Remove metadata
             metadata = self.load_metadata()
@@ -179,7 +196,6 @@ class FileService:
                 del metadata[filename]
                 self.save_metadata(metadata)
             
-            logger.info(f"File deleted successfully from S3: {filename}")
             return True, f'File "{filename}" deleted successfully'
             
         except ClientError as e:
@@ -196,7 +212,6 @@ class AuthService:
     @staticmethod
     def verify_password(password: str) -> bool:
         """Verify password against stored hash."""
-        import bcrypt
         try:
             return bcrypt.checkpw(
                 password.encode('utf-8'), 

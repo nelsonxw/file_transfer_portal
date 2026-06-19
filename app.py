@@ -1,15 +1,15 @@
 import logging
+from typing import Callable
 from functools import wraps
-from flask import Flask, render_template, request, redirect, url_for, session, send_file, flash
+from flask import Flask, render_template, request, redirect, url_for, session, send_file, flash, Response
+from werkzeug.utils import secure_filename
+from botocore.exceptions import ClientError
 
-from config import Config
+from config import Config, setup_logging
 from services import FileService, AuthService
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+setup_logging()
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
@@ -19,7 +19,7 @@ Config.init_app(app)
 file_service = FileService(app.root_path)
 auth_service = AuthService()
 
-def login_required(f):
+def login_required(f: Callable) -> Callable:
     """Decorator to require login for routes."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -29,13 +29,13 @@ def login_required(f):
     return decorated_function
 
 @app.route('/')
-def index():
+def index() -> Response:
     if 'logged_in' in session:
         return redirect(url_for('dashboard'))
     return redirect(url_for('login'))
 
 @app.route('/login', methods=['GET', 'POST'])
-def login():
+def login() -> Response:
     """Handle user login."""
     if request.method == 'POST':
         password = request.form.get('password')
@@ -49,13 +49,13 @@ def login():
     return render_template('login.html')
 
 @app.route('/logout')
-def logout():
+def logout() -> Response:
     session.clear()
     return redirect(url_for('login'))
 
 @app.route('/dashboard')
 @login_required
-def dashboard():
+def dashboard() -> str:
     """Display file dashboard with search and sorting."""
     search_query = request.args.get('search', '')
     sort_by = request.args.get('sort', 'name')
@@ -73,7 +73,7 @@ def dashboard():
 
 @app.route('/upload', methods=['POST'])
 @login_required
-def upload_file():
+def upload_file() -> Response:
     """Handle file upload."""
     if 'file' not in request.files:
         flash('No file selected', 'error')
@@ -91,48 +91,30 @@ def upload_file():
 
 @app.route('/download/<filename>')
 @login_required
-def download_file(filename):
+def download_file(filename: str) -> Response:
     """Handle file download from S3."""
-    try:
-        from werkzeug.utils import secure_filename
-        from botocore.exceptions import ClientError
-        
-        filename = secure_filename(filename)
-        
-        if not file_service.file_exists(filename):
-            flash('File not found', 'error')
-            return redirect(url_for('dashboard'))
-        
-        # Get file from S3
-        response = file_service.s3_client.get_object(
-            Bucket=file_service.bucket_name,
-            Key=filename
-        )
-        
-        # Stream the file content
-        file_stream = response['Body']
-        content_type = response.get('ContentType', 'application/octet-stream')
-        
-        logger.info(f'File downloaded from S3: {filename}')
+    filename = secure_filename(filename)
+    
+    if not file_service.file_exists(filename):
+        flash('File not found', 'error')
+        return redirect(url_for('dashboard'))
+    
+    success, file_stream, content_type = file_service.download_file(filename)
+    
+    if success and file_stream:
         return send_file(
             file_stream,
             as_attachment=True,
             download_name=filename,
             mimetype=content_type
         )
-        
-    except ClientError as e:
-        logger.error(f'Error downloading file from S3: {e}')
-        flash('Error downloading file', 'error')
-        return redirect(url_for('dashboard'))
-    except Exception as e:
-        logger.error(f'Error downloading file: {e}')
+    else:
         flash('Error downloading file', 'error')
         return redirect(url_for('dashboard'))
 
 @app.route('/delete/<filename>')
 @login_required
-def delete_file(filename):
+def delete_file(filename: str) -> Response:
     """Handle file deletion."""
     success, message = file_service.delete_file(filename)
     
