@@ -3,6 +3,7 @@ from typing import Callable
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, session, send_file, flash, Response, jsonify
 from werkzeug.utils import secure_filename
+from werkzeug.exceptions import RequestEntityTooLarge
 from botocore.exceptions import ClientError
 
 from config import Config, setup_logging
@@ -14,7 +15,9 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 Config.init_app(app)
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max upload size
+# Ensure MAX_CONTENT_LENGTH is set (already set by Config.init_app but ensuring it)
+app.config['MAX_CONTENT_LENGTH'] = Config.MAX_FILE_SIZE
+logger.info(f"MAX_CONTENT_LENGTH configured: {app.config['MAX_CONTENT_LENGTH']} bytes ({app.config['MAX_CONTENT_LENGTH'] / (1024*1024)} MB)")
 
 # Initialize services
 file_service = FileService(app.root_path)
@@ -90,19 +93,32 @@ def api_files() -> Response:
 @login_required
 def upload_file() -> Response:
     """Handle file upload."""
-    if 'file' not in request.files:
-        flash('No file selected', 'error')
+    try:
+        logger.info(f"Upload request received. Content-Length: {request.content_length if 'Content-Length' in request.headers else 'unknown'}")
+        
+        if 'file' not in request.files:
+            flash('No file selected', 'error')
+            return redirect(url_for('dashboard'))
+        
+        file = request.files['file']
+        logger.info(f"File received: {file.filename}, size: {file.content_length if hasattr(file, 'content_length') else 'unknown'}")
+        
+        success, message = file_service.upload_file(file)
+        
+        if success:
+            flash(message, 'success')
+        else:
+            flash(message, 'error')
+        
         return redirect(url_for('dashboard'))
-    
-    file = request.files['file']
-    success, message = file_service.upload_file(file)
-    
-    if success:
-        flash(message, 'success')
-    else:
-        flash(message, 'error')
-    
-    return redirect(url_for('dashboard'))
+    except RequestEntityTooLarge as e:
+        logger.error(f"RequestEntityTooLarge exception: {e}")
+        flash('File too large. Maximum size is 500MB.', 'error')
+        return redirect(url_for('dashboard'))
+    except Exception as e:
+        logger.error(f"Unexpected error during upload: {e}")
+        flash(f'Upload failed: {str(e)}', 'error')
+        return redirect(url_for('dashboard'))
 
 @app.route('/download/<filename>')
 @login_required

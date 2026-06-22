@@ -23,7 +23,7 @@ class Config:
     
     # File upload configuration
     METADATA_FILE: Final[str] = 'file_metadata.json'
-    MAX_FILE_SIZE: Final[int] = 100 * 1024 * 1024  # 100 MB
+    MAX_FILE_SIZE: Final[int] = 500 * 1024 * 1024  # 500 MB
     
     # AWS S3 configuration (required)
     AWS_ACCESS_KEY_ID: str = os.environ.get('AWS_ACCESS_KEY_ID', '')
