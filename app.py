@@ -113,6 +113,17 @@ def get_presigned_url() -> Response:
     else:
         return jsonify({'error': 'Failed to generate presigned URL'}), 500
 
+@app.route('/api/configure-cors', methods=['POST'])
+@login_required
+def configure_cors() -> Response:
+    """API endpoint to configure S3 bucket CORS policy."""
+    allowed_origins = request.json.get('allowed_origins', ['*'])
+    success, message = file_service.configure_cors(allowed_origins)
+    if success:
+        return jsonify({'message': message})
+    else:
+        return jsonify({'error': message}), 500
+
 @app.route('/upload', methods=['POST'])
 @login_required
 def upload_file() -> Response:

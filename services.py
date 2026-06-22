@@ -244,6 +244,37 @@ class FileService:
         except Exception as e:
             logger.error(f"Error generating presigned URL: {e}")
             return False, None
+    
+    def configure_cors(self, allowed_origins: List[str] = None) -> Tuple[bool, str]:
+        """Configure CORS policy for the S3 bucket to allow cross-origin requests."""
+        if allowed_origins is None:
+            allowed_origins = ['*']  # Allow all origins by default
+        
+        cors_configuration = {
+            'CORSRules': [
+                {
+                    'AllowedHeaders': ['*'],
+                    'AllowedMethods': ['PUT', 'POST', 'GET', 'DELETE', 'HEAD'],
+                    'AllowedOrigins': allowed_origins,
+                    'ExposeHeaders': ['ETag'],
+                    'MaxAgeSeconds': 3600
+                }
+            ]
+        }
+        
+        try:
+            self.s3_client.put_bucket_cors(
+                Bucket=self.bucket_name,
+                CORSConfiguration=cors_configuration
+            )
+            logger.info(f"CORS configuration updated for bucket: {self.bucket_name}")
+            return True, 'CORS configuration updated successfully'
+        except ClientError as e:
+            logger.error(f"Error configuring CORS: {e}")
+            return False, f'Error configuring CORS: {str(e)}'
+        except Exception as e:
+            logger.error(f"Error configuring CORS: {e}")
+            return False, f'Error configuring CORS: {str(e)}'
 
 
 class AuthService:
