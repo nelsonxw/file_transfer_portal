@@ -21,6 +21,7 @@ class FileService:
     def __init__(self, app_root_path: str):
         self.app_root_path = app_root_path
         self.metadata_path = os.path.join(app_root_path, Config.METADATA_FILE)
+        self.metadata_key = 'metadata/file_metadata.json'
         
         # Initialize S3 client
         try:
@@ -40,24 +41,38 @@ class FileService:
             raise
     
     def load_metadata(self) -> Dict[str, Dict]:
-        """Load file metadata from JSON file."""
+        """Load file metadata from S3."""
         try:
-            if os.path.exists(self.metadata_path):
-                with open(self.metadata_path, 'r') as f:
-                    return json.load(f)
+            response = self.s3_client.get_object(
+                Bucket=self.bucket_name,
+                Key=self.metadata_key
+            )
+            metadata_content = response['Body'].read().decode('utf-8')
+            return json.loads(metadata_content)
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'NoSuchKey':
+                # Metadata file doesn't exist yet, return empty dict
+                logger.info(f"Metadata file not found in S3, creating new one")
+                return {}
+            logger.error(f"Error loading metadata from S3: {e}")
             return {}
-        except (json.JSONDecodeError, IOError) as e:
-            logger.error(f"Error loading metadata: {e}")
+        except (json.JSONDecodeError, Exception) as e:
+            logger.error(f"Error parsing metadata from S3: {e}")
             return {}
     
     def save_metadata(self, metadata: Dict[str, Dict]) -> bool:
-        """Save file metadata to JSON file."""
+        """Save file metadata to S3."""
         try:
-            with open(self.metadata_path, 'w') as f:
-                json.dump(metadata, f, indent=2)
+            metadata_content = json.dumps(metadata, indent=2)
+            self.s3_client.put_object(
+                Bucket=self.bucket_name,
+                Key=self.metadata_key,
+                Body=metadata_content,
+                ContentType='application/json'
+            )
             return True
-        except IOError as e:
-            logger.error(f"Error saving metadata: {e}")
+        except ClientError as e:
+            logger.error(f"Error saving metadata to S3: {e}")
             return False
     
     def get_file_extension(self, filename: str) -> str:
@@ -82,6 +97,10 @@ class FileService:
             if 'Contents' in response:
                 for obj in response['Contents']:
                     filename = obj['Key']
+                    
+                    # Skip metadata file
+                    if filename == self.metadata_key:
+                        continue
                     
                     # Search filter
                     if search_query and search_query not in filename.lower():
@@ -110,9 +129,9 @@ class FileService:
     def _get_sort_key(self, sort_by: str):
         """Get sort key function based on sort criteria."""
         sort_keys = {
-            'name': lambda x: x['name'],
+            'name': lambda x: x['name'].lower(),
             'size': lambda x: x['size'],
-            'type': lambda x: x['extension'],
+            'type': lambda x: x['extension'].lower(),
             'date': lambda x: x['upload_date'] or ''
         }
         return sort_keys.get(sort_by)
