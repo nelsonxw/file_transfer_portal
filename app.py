@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 Config.init_app(app)
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max upload size
 
 # Initialize services
 file_service = FileService(app.root_path)

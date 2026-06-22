@@ -587,13 +587,16 @@
             }
             
             // Set up live search with request cancellation
-            document.getElementById('searchInput').addEventListener('input', function(e) {
-                if (currentController) {
-                    currentController.abort();
-                    currentController = null;
-                }
-                applySort();
-            });
+            const searchInput = document.getElementById('searchInput');
+            if (searchInput) {
+                searchInput.addEventListener('input', function(e) {
+                    if (currentController) {
+                        currentController.abort();
+                        currentController = null;
+                    }
+                    applySort();
+                });
+            }
         }
 
         // Initialize on page load
