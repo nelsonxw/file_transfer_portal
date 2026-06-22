@@ -292,7 +292,7 @@ class FileService:
             'CORSRules': [
                 {
                     'AllowedHeaders': ['*'],
-                    'AllowedMethods': ['PUT', 'POST', 'GET', 'DELETE', 'HEAD'],
+                    'AllowedMethods': ['PUT', 'POST', 'GET', 'DELETE', 'HEAD', 'OPTIONS'],
                     'AllowedOrigins': allowed_origins,
                     'ExposeHeaders': ['ETag'],
                     'MaxAgeSeconds': 3600
