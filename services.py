@@ -8,6 +8,7 @@ from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.datastructures import FileStorage
 import boto3
+from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError, NoCredentialsError
 
 from config import Config
@@ -25,11 +26,22 @@ class FileService:
         
         # Initialize S3 client
         try:
+            endpoint_url = None
+            if Config.AWS_REGION and Config.AWS_REGION != 'us-east-1':
+                endpoint_url = f"https://s3.{Config.AWS_REGION}.amazonaws.com"
+
+            boto_config = BotoConfig(
+                signature_version='s3v4',
+                s3={'addressing_style': 'virtual'}
+            )
+
             self.s3_client = boto3.client(
                 's3',
                 aws_access_key_id=Config.AWS_ACCESS_KEY_ID,
                 aws_secret_access_key=Config.AWS_SECRET_ACCESS_KEY,
-                region_name=Config.AWS_REGION
+                region_name=Config.AWS_REGION,
+                endpoint_url=endpoint_url,
+                config=boto_config
             )
             self.bucket_name = Config.S3_BUCKET_NAME
             
@@ -161,17 +173,6 @@ class FileService:
 
         return True, '', sanitized_name
 
-    def _normalize_presigned_url(self, url: Optional[str]) -> Optional[str]:
-        """Ensure the presigned URL points to the correct regional endpoint to avoid redirects."""
-        if not url or not Config.AWS_REGION or Config.AWS_REGION == 'us-east-1':
-            return url
-
-        suffix = '.s3.amazonaws.com'
-        regional_suffix = f'.s3.{Config.AWS_REGION}.amazonaws.com'
-        if suffix in url and regional_suffix not in url:
-            return url.replace(suffix, regional_suffix, 1)
-        return url
-
     def upload_file(self, file: FileStorage) -> Tuple[bool, str]:
         """Upload a file to S3 with upload date as object metadata."""
         try:
@@ -285,8 +286,7 @@ class FileService:
             }
 
             logger.info(f"Generated presigned URL for: {sanitized_name}")
-            normalized_url = self._normalize_presigned_url(presigned_url)
-            return True, normalized_url, headers, sanitized_name
+            return True, presigned_url, headers, sanitized_name
 
         except ClientError as e:
             logger.error(f"Error generating presigned URL: {e}")
