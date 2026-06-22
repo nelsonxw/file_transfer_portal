@@ -57,6 +57,16 @@ def logout() -> Response:
     session.clear()
     return redirect(url_for('login'))
 
+@app.route('/favicon.ico')
+def favicon():
+    """Return empty response for favicon request to avoid 404 errors."""
+    return '', 204
+
+@app.route('/favicon.png')
+def favicon_png():
+    """Return empty response for favicon request to avoid 404 errors."""
+    return '', 204
+
 @app.route('/dashboard')
 @login_required
 def dashboard() -> str:
@@ -88,6 +98,20 @@ def api_files() -> Response:
     files = file_service.list_files(search_query, sort_by, sort_order)
     
     return jsonify({'files': files})
+
+@app.route('/api/presigned-url', methods=['POST'])
+@login_required
+def get_presigned_url() -> Response:
+    """API endpoint to generate presigned URL for direct S3 upload."""
+    filename = request.json.get('filename')
+    if not filename:
+        return jsonify({'error': 'Filename is required'}), 400
+    
+    success, url = file_service.generate_presigned_url(filename)
+    if success and url:
+        return jsonify({'url': url})
+    else:
+        return jsonify({'error': 'Failed to generate presigned URL'}), 500
 
 @app.route('/upload', methods=['POST'])
 @login_required

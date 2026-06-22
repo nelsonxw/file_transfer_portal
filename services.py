@@ -2,7 +2,7 @@ import os
 import json
 import logging
 import bcrypt
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
@@ -219,6 +219,31 @@ class FileService:
         except Exception as e:
             logger.error(f"Error deleting file: {e}")
             return False, f'Error deleting file: {str(e)}'
+    
+    def generate_presigned_url(self, filename: str, expiration: int = 3600) -> Tuple[bool, Optional[str]]:
+        """Generate a presigned URL for uploading a file directly to S3."""
+        try:
+            filename = secure_filename(filename)
+            
+            presigned_url = self.s3_client.generate_presigned_url(
+                'put_object',
+                Params={
+                    'Bucket': self.bucket_name,
+                    'Key': filename,
+                    'ContentType': 'application/octet-stream'
+                },
+                ExpiresIn=expiration
+            )
+            
+            logger.info(f"Generated presigned URL for: {filename}")
+            return True, presigned_url
+            
+        except ClientError as e:
+            logger.error(f"Error generating presigned URL: {e}")
+            return False, None
+        except Exception as e:
+            logger.error(f"Error generating presigned URL: {e}")
+            return False, None
 
 
 class AuthService:

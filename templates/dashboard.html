@@ -632,57 +632,84 @@
             uploadButton.disabled = true;
             uploadButton.textContent = 'Uploading...';
             
-            // Upload files one by one
+            // Upload files one by one using presigned URLs
             let uploadedCount = 0;
             let totalSize = files.reduce((sum, file) => sum + file.size, 0);
             let uploadedSize = 0;
             
-            files.forEach((file, index) => {
-                const formData = new FormData();
-                formData.append('file', file);
-                
-                const xhr = new XMLHttpRequest();
-                
-                xhr.upload.addEventListener('progress', function(e) {
-                    if (e.lengthComputable) {
-                        const fileProgress = (e.loaded / e.total) * (file.size / totalSize) * 100;
-                        const previousProgress = (uploadedSize / totalSize) * 100;
-                        const totalProgress = previousProgress + fileProgress;
-                        progressFill.style.width = totalProgress + '%';
-                        progressText.textContent = `Uploading ${index + 1}/${files.length}: ${Math.round(totalProgress)}%`;
+            async function uploadFile(file, index) {
+                try {
+                    // Get presigned URL
+                    const response = await fetch('/api/presigned-url', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ filename: file.name })
+                    });
+                    
+                    const data = await response.json();
+                    if (!data.url) {
+                        throw new Error('Failed to get presigned URL');
                     }
-                });
-                
-                xhr.addEventListener('load', function() {
-                    if (xhr.status === 200) {
-                        uploadedSize += file.size;
-                        uploadedCount++;
-                        
-                        if (uploadedCount === files.length) {
-                            progressText.textContent = 'Upload complete!';
-                            setTimeout(function() {
-                                window.location.reload();
-                            }, 1000);
+                    
+                    // Upload directly to S3 using presigned URL
+                    const xhr = new XMLHttpRequest();
+                    
+                    xhr.upload.addEventListener('progress', function(e) {
+                        if (e.lengthComputable) {
+                            const fileProgress = (e.loaded / e.total) * (file.size / totalSize) * 100;
+                            const previousProgress = (uploadedSize / totalSize) * 100;
+                            const totalProgress = previousProgress + fileProgress;
+                            progressFill.style.width = totalProgress + '%';
+                            progressText.textContent = `Uploading ${index + 1}/${files.length}: ${Math.round(totalProgress)}%`;
                         }
-                    } else {
+                    });
+                    
+                    xhr.addEventListener('load', function() {
+                        if (xhr.status === 200) {
+                            uploadedSize += file.size;
+                            uploadedCount++;
+                            
+                            if (uploadedCount === files.length) {
+                                progressText.textContent = 'Upload complete!';
+                                setTimeout(function() {
+                                    window.location.reload();
+                                }, 1000);
+                            }
+                        } else {
+                            progressText.textContent = 'Upload failed!';
+                            alert(`Failed to upload "${file.name}". Server returned: ${xhr.status}`);
+                            progressContainer.style.display = 'none';
+                            uploadButton.disabled = false;
+                            uploadButton.textContent = 'Upload';
+                        }
+                    });
+                    
+                    xhr.addEventListener('error', function() {
                         progressText.textContent = 'Upload failed!';
-                        alert(`Failed to upload "${file.name}". Please try again.`);
+                        alert(`Failed to upload "${file.name}". Network error.`);
                         progressContainer.style.display = 'none';
                         uploadButton.disabled = false;
                         uploadButton.textContent = 'Upload';
-                    }
-                });
-                
-                xhr.addEventListener('error', function() {
+                    });
+                    
+                    xhr.open('PUT', data.url);
+                    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+                    xhr.send(file);
+                    
+                } catch (error) {
                     progressText.textContent = 'Upload failed!';
-                    alert(`Failed to upload "${file.name}". Please try again.`);
+                    alert(`Failed to upload "${file.name}": ${error.message}`);
                     progressContainer.style.display = 'none';
                     uploadButton.disabled = false;
                     uploadButton.textContent = 'Upload';
-                });
-                
-                xhr.open('POST', '/upload');
-                xhr.send(formData);
+                }
+            }
+            
+            // Start uploads sequentially
+            files.forEach((file, index) => {
+                uploadFile(file, index);
             });
         });
 
