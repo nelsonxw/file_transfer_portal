@@ -41,39 +41,42 @@ class FileService:
             raise
     
     def load_metadata(self) -> Dict[str, Dict]:
-        """Load file metadata from S3."""
+        """Load file metadata from S3 by scanning all objects and their metadata."""
+        metadata = {}
         try:
-            response = self.s3_client.get_object(
-                Bucket=self.bucket_name,
-                Key=self.metadata_key
-            )
-            metadata_content = response['Body'].read().decode('utf-8')
-            return json.loads(metadata_content)
+            # List all objects in the bucket
+            response = self.s3_client.list_objects_v2(Bucket=self.bucket_name)
+            
+            if 'Contents' in response:
+                for obj in response['Contents']:
+                    filename = obj['Key']
+                    # Skip metadata file
+                    if filename == self.metadata_key:
+                        continue
+                    
+                    # Get object metadata (tags or user metadata)
+                    try:
+                        obj_response = self.s3_client.head_object(
+                            Bucket=self.bucket_name,
+                            Key=filename
+                        )
+                        # Check for upload date in object metadata
+                        upload_date = obj_response.get('Metadata', {}).get('upload_date')
+                        if upload_date:
+                            metadata[filename] = {'upload_date': upload_date}
+                    except ClientError:
+                        # Object might have been deleted, skip
+                        continue
+            
+            return metadata
         except ClientError as e:
-            if e.response['Error']['Code'] == 'NoSuchKey':
-                # Metadata file doesn't exist yet, return empty dict
-                logger.info(f"Metadata file not found in S3, creating new one")
-                return {}
             logger.error(f"Error loading metadata from S3: {e}")
             return {}
-        except (json.JSONDecodeError, Exception) as e:
-            logger.error(f"Error parsing metadata from S3: {e}")
-            return {}
     
-    def save_metadata(self, metadata: Dict[str, Dict]) -> bool:
-        """Save file metadata to S3."""
-        try:
-            metadata_content = json.dumps(metadata, indent=2)
-            self.s3_client.put_object(
-                Bucket=self.bucket_name,
-                Key=self.metadata_key,
-                Body=metadata_content,
-                ContentType='application/json'
-            )
-            return True
-        except ClientError as e:
-            logger.error(f"Error saving metadata to S3: {e}")
-            return False
+    def save_metadata(self, metadata: Dict[str, Dict], etag: Optional[str] = None) -> bool:
+        """Save file metadata to S3 (deprecated - metadata now stored per-object)."""
+        # This method is kept for backward compatibility but no longer used
+        return True
     
     def get_file_extension(self, filename: str) -> str:
         """Extract file extension from filename."""
@@ -88,7 +91,7 @@ class FileService:
         """List files with optional search and sorting."""
         files = []
         metadata = self.load_metadata()
-        search_query = search_query.lower()
+        search_query_lower = search_query.lower().strip() if search_query else ''
         
         try:
             # List objects from S3
@@ -102,8 +105,8 @@ class FileService:
                     if filename == self.metadata_key:
                         continue
                     
-                    # Search filter
-                    if search_query and search_query not in filename.lower():
+                    # Search filter - only filter if search_query is not empty
+                    if search_query_lower and search_query_lower not in filename.lower():
                         continue
                     
                     file_size = obj['Size']
@@ -137,28 +140,27 @@ class FileService:
         return sort_keys.get(sort_by)
     
     def upload_file(self, file: FileStorage) -> Tuple[bool, str]:
-        """Upload a file to S3 and save metadata."""
+        """Upload a file to S3 with upload date as object metadata."""
         try:
             if not file or file.filename == '':
                 return False, 'No file selected'
             
             filename = secure_filename(file.filename)
+            upload_date = datetime.now().isoformat()
             
-            # Upload file to S3
+            # Upload file to S3 with metadata
             self.s3_client.upload_fileobj(
                 file,
                 self.bucket_name,
                 filename,
-                ExtraArgs={'ContentType': file.content_type}
+                ExtraArgs={
+                    'ContentType': file.content_type,
+                    'Metadata': {
+                        'upload_date': upload_date
+                    }
+                }
             )
-            logger.info(f"File uploaded successfully to S3: {filename}")
-            
-            # Update metadata
-            metadata = self.load_metadata()
-            metadata[filename] = {
-                'upload_date': datetime.now().isoformat()
-            }
-            self.save_metadata(metadata)
+            logger.info(f"File uploaded successfully to S3 with metadata: {filename}")
             
             return True, f'File "{filename}" uploaded successfully'
             
@@ -198,22 +200,16 @@ class FileService:
             return False, None, str(e)
     
     def delete_file(self, filename: str) -> Tuple[bool, str]:
-        """Delete a file from S3 and its metadata."""
+        """Delete a file from S3 (metadata is automatically removed with the file)."""
         try:
             filename = secure_filename(filename)
             
             if not self.file_exists(filename):
                 return False, 'File not found'
             
-            # Delete file from S3
+            # Delete file from S3 (metadata is stored with the file, so it's removed automatically)
             self.s3_client.delete_object(Bucket=self.bucket_name, Key=filename)
             logger.info(f"File deleted successfully from S3: {filename}")
-            
-            # Remove metadata
-            metadata = self.load_metadata()
-            if filename in metadata:
-                del metadata[filename]
-                self.save_metadata(metadata)
             
             return True, f'File "{filename}" deleted successfully'
             

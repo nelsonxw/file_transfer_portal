@@ -1,7 +1,7 @@
 import logging
 from typing import Callable
 from functools import wraps
-from flask import Flask, render_template, request, redirect, url_for, session, send_file, flash, Response
+from flask import Flask, render_template, request, redirect, url_for, session, send_file, flash, Response, jsonify
 from werkzeug.utils import secure_filename
 from botocore.exceptions import ClientError
 
@@ -70,6 +70,20 @@ def dashboard() -> str:
         sort_by=sort_by,
         sort_order=sort_order
     )
+
+
+# API Routes
+@app.route('/api/files')
+@login_required
+def api_files() -> Response:
+    """API endpoint to return file list as JSON."""
+    search_query = request.args.get('search', '')
+    sort_by = request.args.get('sort', 'name')
+    sort_order = request.args.get('order', 'asc')
+    
+    files = file_service.list_files(search_query, sort_by, sort_order)
+    
+    return jsonify({'files': files})
 
 @app.route('/upload', methods=['POST'])
 @login_required
