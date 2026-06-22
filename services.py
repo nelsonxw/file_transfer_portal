@@ -161,6 +161,17 @@ class FileService:
 
         return True, '', sanitized_name
 
+    def _normalize_presigned_url(self, url: Optional[str]) -> Optional[str]:
+        """Ensure the presigned URL points to the correct regional endpoint to avoid redirects."""
+        if not url or not Config.AWS_REGION or Config.AWS_REGION == 'us-east-1':
+            return url
+
+        suffix = '.s3.amazonaws.com'
+        regional_suffix = f'.s3.{Config.AWS_REGION}.amazonaws.com'
+        if suffix in url and regional_suffix not in url:
+            return url.replace(suffix, regional_suffix, 1)
+        return url
+
     def upload_file(self, file: FileStorage) -> Tuple[bool, str]:
         """Upload a file to S3 with upload date as object metadata."""
         try:
@@ -274,7 +285,8 @@ class FileService:
             }
 
             logger.info(f"Generated presigned URL for: {sanitized_name}")
-            return True, presigned_url, headers, sanitized_name
+            normalized_url = self._normalize_presigned_url(presigned_url)
+            return True, normalized_url, headers, sanitized_name
 
         except ClientError as e:
             logger.error(f"Error generating presigned URL: {e}")
