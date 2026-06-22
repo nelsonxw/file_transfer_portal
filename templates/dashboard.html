@@ -632,28 +632,16 @@
             uploadButton.disabled = true;
             uploadButton.textContent = 'Uploading...';
             
-            // Upload files one by one using presigned URLs
+            // Upload files one by one using backend proxy (bypasses CORS)
             let uploadedCount = 0;
             let totalSize = files.reduce((sum, file) => sum + file.size, 0);
             let uploadedSize = 0;
             
             async function uploadFile(file, index) {
                 try {
-                    // Get presigned URL
-                    const response = await fetch('/api/presigned-url', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({ filename: file.name })
-                    });
+                    const formData = new FormData();
+                    formData.append('file', file);
                     
-                    const data = await response.json();
-                    if (!data.url) {
-                        throw new Error('Failed to get presigned URL');
-                    }
-                    
-                    // Upload directly to S3 using presigned URL
                     const xhr = new XMLHttpRequest();
                     
                     xhr.upload.addEventListener('progress', function(e) {
@@ -694,9 +682,8 @@
                         uploadButton.textContent = 'Upload';
                     });
                     
-                    xhr.open('PUT', data.url);
-                    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-                    xhr.send(file);
+                    xhr.open('POST', '/api/upload-proxy');
+                    xhr.send(formData);
                     
                 } catch (error) {
                     progressText.textContent = 'Upload failed!';

@@ -263,6 +263,7 @@ class FileService:
         }
         
         try:
+            # Try standard S3 CORS configuration first
             self.s3_client.put_bucket_cors(
                 Bucket=self.bucket_name,
                 CORSConfiguration=cors_configuration
@@ -270,8 +271,9 @@ class FileService:
             logger.info(f"CORS configuration updated for bucket: {self.bucket_name}")
             return True, 'CORS configuration updated successfully'
         except ClientError as e:
-            logger.error(f"Error configuring CORS: {e}")
-            return False, f'Error configuring CORS: {str(e)}'
+            # If standard CORS fails, bucket might be S3 Express One Zone which doesn't support CORS the same way
+            logger.error(f"Error configuring CORS (bucket might be S3 Express One Zone): {e}")
+            return False, f'CORS not supported by this bucket type. Use backend proxy instead.'
         except Exception as e:
             logger.error(f"Error configuring CORS: {e}")
             return False, f'Error configuring CORS: {str(e)}'

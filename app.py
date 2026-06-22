@@ -113,8 +113,26 @@ def get_presigned_url() -> Response:
     else:
         return jsonify({'error': 'Failed to generate presigned URL'}), 500
 
-@app.route('/api/configure-cors', methods=['POST'])
+@app.route('/api/upload-proxy', methods=['POST'])
 @login_required
+def upload_proxy() -> Response:
+    """API endpoint to proxy file upload to S3 (bypasses CORS and Vercel limits)."""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file provided'}), 400
+        
+        file = request.files['file']
+        success, message = file_service.upload_file(file)
+        
+        if success:
+            return jsonify({'success': True, 'message': message})
+        else:
+            return jsonify({'success': False, 'error': message}), 500
+    except Exception as e:
+        logger.error(f"Error in upload proxy: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/configure-cors', methods=['POST'])
 def configure_cors() -> Response:
     """API endpoint to configure S3 bucket CORS policy."""
     allowed_origins = request.json.get('allowed_origins', ['*'])
