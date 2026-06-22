@@ -139,6 +139,28 @@ class FileService:
         }
         return sort_keys.get(sort_by)
     
+    def _current_iso_timestamp(self) -> str:
+        """Return a UTC ISO-8601 timestamp without microseconds."""
+        return datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
+
+    def validate_upload_request(self, filename: str, file_size: Optional[int]) -> Tuple[bool, str, Optional[str]]:
+        """Validate filename and file size before creating a presigned URL."""
+        if not filename:
+            return False, 'Filename is required', None
+
+        sanitized_name = secure_filename(filename)
+        if not sanitized_name:
+            return False, 'Invalid filename provided', None
+
+        if file_size is None:
+            return False, 'File size is required', None
+
+        if file_size > Config.MAX_FILE_SIZE:
+            max_mb = Config.MAX_FILE_SIZE / (1024 * 1024)
+            return False, f'File too large. Maximum size is {max_mb:.0f}MB', None
+
+        return True, '', sanitized_name
+
     def upload_file(self, file: FileStorage) -> Tuple[bool, str]:
         """Upload a file to S3 with upload date as object metadata."""
         try:
@@ -146,7 +168,7 @@ class FileService:
                 return False, 'No file selected'
             
             filename = secure_filename(file.filename)
-            upload_date = datetime.now().isoformat()
+            upload_date = self._current_iso_timestamp()
             
             # Upload file to S3 with metadata
             self.s3_client.upload_fileobj(
@@ -220,30 +242,46 @@ class FileService:
             logger.error(f"Error deleting file: {e}")
             return False, f'Error deleting file: {str(e)}'
     
-    def generate_presigned_url(self, filename: str, expiration: int = 3600) -> Tuple[bool, Optional[str]]:
-        """Generate a presigned URL for uploading a file directly to S3."""
+    def generate_presigned_url(
+        self,
+        filename: str,
+        content_type: Optional[str] = None,
+        upload_date: Optional[str] = None,
+        expiration: Optional[int] = None
+    ) -> Tuple[bool, Optional[str], Optional[Dict[str, str]], Optional[str]]:
+        """Generate a presigned URL and headers for uploading a file directly to S3."""
         try:
-            filename = secure_filename(filename)
-            
+            sanitized_name = secure_filename(filename)
+            normalized_content_type = content_type or 'application/octet-stream'
+            timestamp = upload_date or self._current_iso_timestamp()
+
             presigned_url = self.s3_client.generate_presigned_url(
                 'put_object',
                 Params={
                     'Bucket': self.bucket_name,
-                    'Key': filename,
-                    'ContentType': 'application/octet-stream'
+                    'Key': sanitized_name,
+                    'ContentType': normalized_content_type,
+                    'Metadata': {
+                        'upload_date': timestamp
+                    }
                 },
-                ExpiresIn=expiration
+                ExpiresIn=expiration or Config.PRESIGNED_URL_EXPIRATION
             )
-            
-            logger.info(f"Generated presigned URL for: {filename}")
-            return True, presigned_url
-            
+
+            headers = {
+                'Content-Type': normalized_content_type,
+                'x-amz-meta-upload_date': timestamp
+            }
+
+            logger.info(f"Generated presigned URL for: {sanitized_name}")
+            return True, presigned_url, headers, sanitized_name
+
         except ClientError as e:
             logger.error(f"Error generating presigned URL: {e}")
-            return False, None
+            return False, None, None, None
         except Exception as e:
             logger.error(f"Error generating presigned URL: {e}")
-            return False, None
+            return False, None, None, None
     
     def configure_cors(self, allowed_origins: List[str] = None) -> Tuple[bool, str]:
         """Configure CORS policy for the S3 bucket to allow cross-origin requests."""

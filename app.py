@@ -103,13 +103,26 @@ def api_files() -> Response:
 @login_required
 def get_presigned_url() -> Response:
     """API endpoint to generate presigned URL for direct S3 upload."""
-    filename = request.json.get('filename')
-    if not filename:
-        return jsonify({'error': 'Filename is required'}), 400
+    payload = request.get_json(silent=True) or {}
+    filename = payload.get('filename')
+    content_type = payload.get('contentType')
+    file_size = payload.get('fileSize')
+
+    try:
+        file_size_value = int(file_size) if file_size is not None else None
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Invalid file size provided'}), 400
+
+    is_valid, error_message, sanitized_name = file_service.validate_upload_request(filename, file_size_value)
+    if not is_valid or not sanitized_name:
+        return jsonify({'error': error_message}), 400
     
-    success, url = file_service.generate_presigned_url(filename)
-    if success and url:
-        return jsonify({'url': url})
+    success, url, headers, normalized_name = file_service.generate_presigned_url(
+        sanitized_name,
+        content_type=content_type
+    )
+    if success and url and headers:
+        return jsonify({'url': url, 'headers': headers, 'filename': normalized_name})
     else:
         return jsonify({'error': 'Failed to generate presigned URL'}), 500
 

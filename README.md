@@ -6,6 +6,7 @@ A secure web application for uploading and downloading files with password prote
 
 - **Password Authentication**: Secure login using bcrypt password hashing
 - **File Upload**: Upload files with size limit (100MB) and type restrictions
+- **Direct-to-S3 Uploads**: Browser uploads files straight to S3 via presigned URLs (works inside Vercel's 4.5MB body limit)
 - **File Download**: Download uploaded files securely from S3
 - **File Management**: View, download, and delete files stored in S3
 - **Modern UI**: Clean, responsive interface with gradient design
@@ -85,6 +86,28 @@ python app.py
 3. Login with the default password:
 - **Default Password**: `admin123`
 
+### Deploying on Vercel / Handling 4.5MB Limits
+
+Vercel limits incoming request bodies for serverless functions to ~4.5MB. To keep using Vercel while supporting large files:
+
+1. **Direct Upload Flow**: The dashboard now requests a presigned URL from `/api/presigned-url` and streams the file directly from the browser to S3. No large files hit the Flask endpoint, so the Vercel limit is never triggered.
+2. **CORS for Your Bucket**: Allow your Vercel domain (e.g., `https://your-app.vercel.app`) to perform `PUT` requests. Example policy:
+   ```json
+   {
+     "CORSRules": [
+       {
+         "AllowedHeaders": ["*"],
+         "AllowedMethods": ["GET", "PUT", "HEAD"],
+         "AllowedOrigins": ["https://your-app.vercel.app"],
+         "ExposeHeaders": ["ETag"],
+         "MaxAgeSeconds": 3600
+       }
+     ]
+   }
+   ```
+   You can configure this manually in S3 or by calling the `/api/configure-cors` endpoint with your allowed origins.
+3. **Environment Variable**: Optionally adjust `PRESIGNED_URL_EXPIRATION` (default 15 minutes) to control how long each upload URL remains valid.
+
 ## Security
 
 - Passwords are hashed using bcrypt
@@ -103,6 +126,7 @@ You can modify the following settings in `config.py`:
 - `AWS_REGION`: AWS region (default: 'us-east-1')
 - `S3_BUCKET_NAME`: S3 bucket name (or set via environment variable)
 - `MAX_FILE_SIZE`: Maximum file size in bytes (default: 100MB)
+- `PRESIGNED_URL_EXPIRATION`: Seconds before a presigned upload URL expires (default: 900)
 - `DEFAULT_PASSWORD_HASH`: Change the default password by modifying the hash
 
 To change the default password, replace the hash in `config.py`:

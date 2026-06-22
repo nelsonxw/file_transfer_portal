@@ -470,6 +470,10 @@
         let currentSort = '{{ sort_by }}';
         let currentOrder = '{{ sort_order }}';
         let currentController = null;
+        const progressContainer = document.getElementById('progressContainer');
+        const progressFill = document.getElementById('progressFill');
+        const progressText = document.getElementById('progressText');
+        const uploadButton = document.getElementById('uploadButton');
 
         /**
          * Handle column header click for sorting
@@ -602,102 +606,124 @@
         // Initialize on page load
         window.addEventListener('DOMContentLoaded', initializeApp);
 
-        // File upload with progress tracking
-        document.getElementById('uploadForm').addEventListener('submit', function(e) {
+        async function requestPresignedUrl(file) {
+            const response = await fetch('/api/presigned-url', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    filename: file.name,
+                    contentType: file.type || 'application/octet-stream',
+                    fileSize: file.size
+                })
+            });
+
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.error || 'Unable to generate upload URL');
+            }
+
+            return data;
+        }
+
+        function uploadFileToS3(url, headers, file, index, filesLength, totalSize, uploadedBefore) {
+            return new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+
+                xhr.upload.addEventListener('progress', function(e) {
+                    if (e.lengthComputable) {
+                        const totalProgress = ((uploadedBefore + e.loaded) / totalSize) * 100;
+                        progressFill.style.width = totalProgress + '%';
+                        progressText.textContent = `Uploading ${index + 1}/${filesLength}: ${Math.round(totalProgress)}%`;
+                    }
+                });
+
+                xhr.addEventListener('load', function() {
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        resolve();
+                    } else {
+                        reject(new Error(`Failed to upload "${file.name}". S3 returned status ${xhr.status}`));
+                    }
+                });
+
+                xhr.addEventListener('error', function() {
+                    reject(new Error(`Network error while uploading "${file.name}"`));
+                });
+
+                xhr.open('PUT', url, true);
+                Object.entries(headers || {}).forEach(([key, value]) => {
+                    if (value) {
+                        xhr.setRequestHeader(key, value);
+                    }
+                });
+                xhr.send(file);
+            });
+        }
+
+        // File upload with progress tracking using direct-to-S3 uploads
+        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
             e.preventDefault();
-            
+
             const fileInput = document.getElementById('fileInput');
             const files = Array.from(fileInput.files);
-            
+
             if (files.length === 0) {
                 alert('Please select at least one file to upload');
                 return;
             }
-            
-            // Check file sizes
+
             for (const file of files) {
                 if (file.size > MAX_FILE_SIZE) {
                     alert(`File "${file.name}" exceeds the maximum limit of 100MB. Your file is ${(file.size / (1024 * 1024)).toFixed(2)}MB`);
                     return;
                 }
             }
-            
-            // Show progress bar
-            const progressContainer = document.getElementById('progressContainer');
-            const progressFill = document.getElementById('progressFill');
-            const progressText = document.getElementById('progressText');
-            const uploadButton = document.getElementById('uploadButton');
-            
+
             progressContainer.style.display = 'block';
+            progressFill.style.width = '0%';
+            progressText.textContent = '0%';
             uploadButton.disabled = true;
             uploadButton.textContent = 'Uploading...';
-            
-            // Upload files one by one using backend proxy (bypasses CORS)
-            let uploadedCount = 0;
-            let totalSize = files.reduce((sum, file) => sum + file.size, 0);
+
+            const totalSize = files.reduce((sum, file) => sum + file.size, 0);
             let uploadedSize = 0;
-            
-            async function uploadFile(file, index) {
-                try {
-                    const formData = new FormData();
-                    formData.append('file', file);
-                    
-                    const xhr = new XMLHttpRequest();
-                    
-                    xhr.upload.addEventListener('progress', function(e) {
-                        if (e.lengthComputable) {
-                            const fileProgress = (e.loaded / e.total) * (file.size / totalSize) * 100;
-                            const previousProgress = (uploadedSize / totalSize) * 100;
-                            const totalProgress = previousProgress + fileProgress;
-                            progressFill.style.width = totalProgress + '%';
-                            progressText.textContent = `Uploading ${index + 1}/${files.length}: ${Math.round(totalProgress)}%`;
-                        }
-                    });
-                    
-                    xhr.addEventListener('load', function() {
-                        if (xhr.status === 200) {
-                            uploadedSize += file.size;
-                            uploadedCount++;
-                            
-                            if (uploadedCount === files.length) {
-                                progressText.textContent = 'Upload complete!';
-                                setTimeout(function() {
-                                    window.location.reload();
-                                }, 1000);
-                            }
-                        } else {
-                            progressText.textContent = 'Upload failed!';
-                            alert(`Failed to upload "${file.name}". Server returned: ${xhr.status}`);
-                            progressContainer.style.display = 'none';
-                            uploadButton.disabled = false;
-                            uploadButton.textContent = 'Upload';
-                        }
-                    });
-                    
-                    xhr.addEventListener('error', function() {
-                        progressText.textContent = 'Upload failed!';
-                        alert(`Failed to upload "${file.name}". Network error.`);
-                        progressContainer.style.display = 'none';
-                        uploadButton.disabled = false;
-                        uploadButton.textContent = 'Upload';
-                    });
-                    
-                    xhr.open('POST', '/api/upload-proxy');
-                    xhr.send(formData);
-                    
-                } catch (error) {
-                    progressText.textContent = 'Upload failed!';
-                    alert(`Failed to upload "${file.name}": ${error.message}`);
+            let uploadSucceeded = false;
+
+            try {
+                for (let index = 0; index < files.length; index++) {
+                    const file = files[index];
+                    const { url, headers } = await requestPresignedUrl(file);
+                    const uploadedBefore = uploadedSize;
+                    await uploadFileToS3(
+                        url,
+                        headers,
+                        file,
+                        index,
+                        files.length,
+                        totalSize,
+                        uploadedBefore
+                    );
+                    uploadedSize += file.size;
+                }
+
+                uploadSucceeded = true;
+                progressFill.style.width = '100%';
+                progressText.textContent = 'Upload complete!';
+                setTimeout(function() {
+                    window.location.reload();
+                }, 1000);
+            } catch (error) {
+                alert(error.message || 'Upload failed');
+            } finally {
+                if (!uploadSucceeded) {
                     progressContainer.style.display = 'none';
+                    progressFill.style.width = '0%';
+                    progressText.textContent = '0%';
                     uploadButton.disabled = false;
                     uploadButton.textContent = 'Upload';
                 }
             }
-            
-            // Start uploads sequentially
-            files.forEach((file, index) => {
-                uploadFile(file, index);
-            });
         });
 
         // Toggle select all checkboxes
