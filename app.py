@@ -179,7 +179,7 @@ def upload_file() -> Response:
         return redirect(url_for('dashboard'))
     except RequestEntityTooLarge as e:
         logger.error(f"RequestEntityTooLarge exception: {e}")
-        flash('File too large. Maximum size is 500MB.', 'error')
+        flash('File too large. Maximum size is 100MB.', 'error')
         return redirect(url_for('dashboard'))
     except Exception as e:
         logger.error(f"Unexpected error during upload: {e}")

@@ -23,7 +23,7 @@ class Config:
     
     # File upload configuration
     METADATA_FILE: Final[str] = 'file_metadata.json'
-    MAX_FILE_SIZE: Final[int] = 500 * 1024 * 1024  # 500 MB
+    MAX_FILE_SIZE: Final[int] = 100 * 1024 * 1024  # 100 MB
     PRESIGNED_URL_EXPIRATION: Final[int] = int(os.environ.get('PRESIGNED_URL_EXPIRATION', "900"))
     
     # AWS S3 configuration (required)
