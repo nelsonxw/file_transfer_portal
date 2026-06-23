@@ -14,7 +14,7 @@ A secure web application for uploading and downloading files with password prote
 
 ## Supported File Types
 
-txt, pdf, png, jpg, jpeg, gif, doc, docx, xls, xlsx, zip, rar
+any file type is supported
 
 ## Installation
 
