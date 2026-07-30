@@ -27,8 +27,10 @@ class Config:
     PRESIGNED_URL_EXPIRATION: Final[int] = int(os.environ.get('PRESIGNED_URL_EXPIRATION', "900"))
     
     # Firebase Storage configuration (required)
-    # Path to the service account JSON file (required for signed upload URLs)
+    # Path to the service account JSON file (alternative to FIREBASE_SERVICE_ACCOUNT_JSON)
     FIREBASE_SERVICE_ACCOUNT_PATH: str = os.environ.get('FIREBASE_SERVICE_ACCOUNT_PATH', '')
+    # Service account JSON contents (use on Vercel instead of a file path)
+    FIREBASE_SERVICE_ACCOUNT_JSON: str = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON', '')
     # Storage bucket name, e.g. "my-app.appspot.com"
     FIREBASE_STORAGE_BUCKET: str = os.environ.get('FIREBASE_STORAGE_BUCKET', '')
     
@@ -41,9 +43,9 @@ class Config:
         """Validate required configuration values."""
         if not Config.FIREBASE_STORAGE_BUCKET:
             raise ValueError("FIREBASE_STORAGE_BUCKET is required")
-        if not Config.FIREBASE_SERVICE_ACCOUNT_PATH:
-            raise ValueError("FIREBASE_SERVICE_ACCOUNT_PATH is required for signed URLs")
-        if not os.path.exists(Config.FIREBASE_SERVICE_ACCOUNT_PATH):
+        if not Config.FIREBASE_SERVICE_ACCOUNT_PATH and not Config.FIREBASE_SERVICE_ACCOUNT_JSON:
+            raise ValueError("FIREBASE_SERVICE_ACCOUNT_PATH or FIREBASE_SERVICE_ACCOUNT_JSON is required")
+        if Config.FIREBASE_SERVICE_ACCOUNT_PATH and not os.path.exists(Config.FIREBASE_SERVICE_ACCOUNT_PATH):
             raise ValueError(f"Service account file not found: {Config.FIREBASE_SERVICE_ACCOUNT_PATH}")
         return True
     

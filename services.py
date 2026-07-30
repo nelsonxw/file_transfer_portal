@@ -1,5 +1,6 @@
 import os
 import io
+import json
 import logging
 import bcrypt
 from datetime import datetime, timedelta
@@ -26,7 +27,10 @@ class FileService:
         # Initialize Firebase Storage
         try:
             if not firebase_admin._apps:
-                cred = credentials.Certificate(Config.FIREBASE_SERVICE_ACCOUNT_PATH)
+                if Config.FIREBASE_SERVICE_ACCOUNT_JSON:
+                    cred = credentials.Certificate(json.loads(Config.FIREBASE_SERVICE_ACCOUNT_JSON))
+                else:
+                    cred = credentials.Certificate(Config.FIREBASE_SERVICE_ACCOUNT_PATH)
                 firebase_admin.initialize_app(
                     cred,
                     {'storageBucket': Config.FIREBASE_STORAGE_BUCKET}
