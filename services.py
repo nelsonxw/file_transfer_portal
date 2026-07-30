@@ -37,6 +37,10 @@ class FileService:
                 )
             self.bucket = storage.bucket()
             logger.info(f"Successfully connected to Firebase Storage bucket: {Config.FIREBASE_STORAGE_BUCKET}")
+            try:
+                self.configure_cors()
+            except Exception as cors_err:
+                logger.warning(f"Could not configure bucket CORS at startup: {cors_err}")
         except Exception as e:
             logger.error(f"Failed to initialize Firebase Storage: {e}")
             raise
@@ -104,7 +108,9 @@ class FileService:
                 
                 file_size = blob.size or 0
                 file_ext = self.get_file_extension(filename)
-                upload_date = metadata.get(filename, {}).get('upload_date', '')
+                upload_date = metadata.get(filename, {}).get('upload_date')
+                if not upload_date and blob.time_created:
+                    upload_date = blob.time_created.replace(tzinfo=None, microsecond=0).isoformat() + 'Z'
                 
                 files.append({
                     'name': filename,
@@ -232,20 +238,16 @@ class FileService:
         try:
             sanitized_name = secure_filename(filename)
             normalized_content_type = content_type or 'application/octet-stream'
-            timestamp = upload_date or self._current_iso_timestamp()
-
             blob = self.bucket.blob(sanitized_name)
             presigned_url = blob.generate_signed_url(
                 version='v4',
                 expiration=timedelta(seconds=expiration or Config.PRESIGNED_URL_EXPIRATION),
                 method='PUT',
-                content_type=normalized_content_type,
-                headers={'x-goog-meta-upload_date': timestamp}
+                content_type=normalized_content_type
             )
 
             headers = {
-                'Content-Type': normalized_content_type,
-                'x-goog-meta-upload_date': timestamp
+                'Content-Type': normalized_content_type
             }
 
             logger.info(f"Generated signed URL for: {sanitized_name}")
