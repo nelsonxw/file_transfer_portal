@@ -661,7 +661,7 @@
             });
         }
 
-        // File upload with progress tracking via backend proxy
+        // File upload with progress tracking using direct-to-Firebase-Storage uploads
         document.getElementById('uploadForm').addEventListener('submit', async function(e) {
             e.preventDefault();
 
@@ -690,52 +690,21 @@
             let uploadedSize = 0;
             let uploadSucceeded = false;
 
-            async function uploadFile(file, index) {
-                const uploadedBefore = uploadedSize;
-                const formData = new FormData();
-                formData.append('file', file);
-
-                return new Promise((resolve, reject) => {
-                    const xhr = new XMLHttpRequest();
-
-                    xhr.upload.addEventListener('progress', function(e) {
-                        if (e.lengthComputable) {
-                            const totalProgress = ((uploadedBefore + e.loaded) / totalSize) * 100;
-                            progressFill.style.width = totalProgress + '%';
-                            progressText.textContent = `Uploading ${index + 1}/${files.length}: ${Math.round(totalProgress)}%`;
-                        }
-                    });
-
-                    xhr.addEventListener('load', function() {
-                        if (xhr.status >= 200 && xhr.status < 300) {
-                            try {
-                                const data = JSON.parse(xhr.responseText);
-                                if (data.success) {
-                                    resolve();
-                                } else {
-                                    reject(new Error(data.error || 'Upload failed'));
-                                }
-                            } catch (err) {
-                                resolve();
-                            }
-                        } else {
-                            reject(new Error(`Upload failed. Server returned ${xhr.status}`));
-                        }
-                    });
-
-                    xhr.addEventListener('error', function() {
-                        reject(new Error(`Network error while uploading "${file.name}"`));
-                    });
-
-                    xhr.open('POST', '/api/upload-proxy', true);
-                    xhr.send(formData);
-                });
-            }
-
             try {
                 for (let index = 0; index < files.length; index++) {
-                    await uploadFile(files[index], index);
-                    uploadedSize += files[index].size;
+                    const file = files[index];
+                    const { url, headers } = await requestPresignedUrl(file);
+                    const uploadedBefore = uploadedSize;
+                    await uploadFileToStorage(
+                        url,
+                        headers,
+                        file,
+                        index,
+                        files.length,
+                        totalSize,
+                        uploadedBefore
+                    );
+                    uploadedSize += file.size;
                 }
 
                 uploadSucceeded = true;
