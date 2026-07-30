@@ -23,14 +23,14 @@ class Config:
     
     # File upload configuration
     METADATA_FILE: Final[str] = 'file_metadata.json'
-    MAX_FILE_SIZE: Final[int] = 100 * 1024 * 1024  # 100 MB
+    MAX_FILE_SIZE: Final[int] = 1024 * 1024 * 1024  # 1 GB
     PRESIGNED_URL_EXPIRATION: Final[int] = int(os.environ.get('PRESIGNED_URL_EXPIRATION', "900"))
     
-    # AWS S3 configuration (required)
-    AWS_ACCESS_KEY_ID: str = os.environ.get('AWS_ACCESS_KEY_ID', '')
-    AWS_SECRET_ACCESS_KEY: str = os.environ.get('AWS_SECRET_ACCESS_KEY', '')
-    AWS_REGION: str = os.environ.get('AWS_REGION', 'us-east-1')
-    S3_BUCKET_NAME: str = os.environ.get('S3_BUCKET_NAME', '')
+    # Firebase Storage configuration (required)
+    # Path to the service account JSON file (required for signed upload URLs)
+    FIREBASE_SERVICE_ACCOUNT_PATH: str = os.environ.get('FIREBASE_SERVICE_ACCOUNT_PATH', '')
+    # Storage bucket name, e.g. "my-app.appspot.com"
+    FIREBASE_STORAGE_BUCKET: str = os.environ.get('FIREBASE_STORAGE_BUCKET', '')
     
     # Authentication
     # Default password is "admin123"
@@ -39,12 +39,12 @@ class Config:
     @staticmethod
     def validate() -> bool:
         """Validate required configuration values."""
-        if not Config.AWS_ACCESS_KEY_ID:
-            raise ValueError("AWS_ACCESS_KEY_ID is required")
-        if not Config.AWS_SECRET_ACCESS_KEY:
-            raise ValueError("AWS_SECRET_ACCESS_KEY is required")
-        if not Config.S3_BUCKET_NAME:
-            raise ValueError("S3_BUCKET_NAME is required")
+        if not Config.FIREBASE_STORAGE_BUCKET:
+            raise ValueError("FIREBASE_STORAGE_BUCKET is required")
+        if not Config.FIREBASE_SERVICE_ACCOUNT_PATH:
+            raise ValueError("FIREBASE_SERVICE_ACCOUNT_PATH is required for signed URLs")
+        if not os.path.exists(Config.FIREBASE_SERVICE_ACCOUNT_PATH):
+            raise ValueError(f"Service account file not found: {Config.FIREBASE_SERVICE_ACCOUNT_PATH}")
         return True
     
     @staticmethod

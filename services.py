@@ -1,14 +1,15 @@
 import os
+import io
 import logging
 import bcrypt
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.datastructures import FileStorage
-import boto3
-from botocore.config import Config as BotoConfig
-from botocore.exceptions import ClientError, NoCredentialsError
+
+import firebase_admin
+from firebase_admin import credentials, storage
 
 from config import Config
 
@@ -16,76 +17,54 @@ logger = logging.getLogger(__name__)
 
 
 class FileService:
-    """Service class for file operations using AWS S3."""
+    """Service class for file operations using Firebase Storage."""
     
     def __init__(self, app_root_path: str):
         self.app_root_path = app_root_path
-        self.metadata_path = os.path.join(app_root_path, Config.METADATA_FILE)
         self.metadata_key = 'metadata/file_metadata.json'
         
-        # Initialize S3 client
+        # Initialize Firebase Storage
         try:
-            endpoint_url = None
-            if Config.AWS_REGION and Config.AWS_REGION != 'us-east-1':
-                endpoint_url = f"https://s3.{Config.AWS_REGION}.amazonaws.com"
-
-            boto_config = BotoConfig(
-                signature_version='s3v4',
-                s3={'addressing_style': 'virtual'}
-            )
-
-            self.s3_client = boto3.client(
-                's3',
-                aws_access_key_id=Config.AWS_ACCESS_KEY_ID,
-                aws_secret_access_key=Config.AWS_SECRET_ACCESS_KEY,
-                region_name=Config.AWS_REGION,
-                endpoint_url=endpoint_url,
-                config=boto_config
-            )
-            self.bucket_name = Config.S3_BUCKET_NAME
-            
-            # Verify bucket exists and is accessible
-            self.s3_client.head_bucket(Bucket=self.bucket_name)
-            logger.info(f"Successfully connected to S3 bucket: {self.bucket_name}")
-        except (ClientError, NoCredentialsError) as e:
-            logger.error(f"Failed to initialize S3 client: {e}")
+            if not firebase_admin._apps:
+                cred = credentials.Certificate(Config.FIREBASE_SERVICE_ACCOUNT_PATH)
+                firebase_admin.initialize_app(
+                    cred,
+                    {'storageBucket': Config.FIREBASE_STORAGE_BUCKET}
+                )
+            self.bucket = storage.bucket()
+            logger.info(f"Successfully connected to Firebase Storage bucket: {Config.FIREBASE_STORAGE_BUCKET}")
+        except Exception as e:
+            logger.error(f"Failed to initialize Firebase Storage: {e}")
             raise
     
     def load_metadata(self) -> Dict[str, Dict]:
-        """Load file metadata from S3 by scanning all objects and their metadata."""
+        """Load file metadata from Firebase Storage by reading blob metadata."""
         metadata = {}
         try:
-            # List all objects in the bucket
-            response = self.s3_client.list_objects_v2(Bucket=self.bucket_name)
+            blobs = self.bucket.list_blobs()
             
-            if 'Contents' in response:
-                for obj in response['Contents']:
-                    filename = obj['Key']
-                    # Skip metadata file
-                    if filename == self.metadata_key:
-                        continue
-                    
-                    # Get object metadata (tags or user metadata)
-                    try:
-                        obj_response = self.s3_client.head_object(
-                            Bucket=self.bucket_name,
-                            Key=filename
-                        )
-                        # Check for upload date in object metadata
-                        upload_date = obj_response.get('Metadata', {}).get('upload_date')
-                        if upload_date:
-                            metadata[filename] = {'upload_date': upload_date}
-                    except ClientError:
-                        # Object might have been deleted, skip
-                        continue
+            for blob in blobs:
+                # Skip metadata file
+                if blob.name == self.metadata_key:
+                    continue
+                
+                # Get object custom metadata
+                try:
+                    blob.reload()
+                    upload_date = (blob.metadata or {}).get('upload_date')
+                    if upload_date:
+                        metadata[blob.name] = {'upload_date': upload_date}
+                except Exception:
+                    # Object might have been deleted, skip
+                    continue
             
             return metadata
-        except ClientError as e:
-            logger.error(f"Error loading metadata from S3: {e}")
+        except Exception as e:
+            logger.error(f"Error loading metadata from Firebase Storage: {e}")
             return {}
     
     def save_metadata(self, metadata: Dict[str, Dict], etag: Optional[str] = None) -> bool:
-        """Save file metadata to S3 (deprecated - metadata now stored per-object)."""
+        """Save file metadata to Firebase Storage (deprecated - metadata now stored per-object)."""
         # This method is kept for backward compatibility but no longer used
         return True
     
@@ -105,33 +84,32 @@ class FileService:
         search_query_lower = search_query.lower().strip() if search_query else ''
         
         try:
-            # List objects from S3
-            response = self.s3_client.list_objects_v2(Bucket=self.bucket_name)
+            # List objects from Firebase Storage
+            blobs = self.bucket.list_blobs()
             
-            if 'Contents' in response:
-                for obj in response['Contents']:
-                    filename = obj['Key']
-                    
-                    # Skip metadata file
-                    if filename == self.metadata_key:
-                        continue
-                    
-                    # Search filter - only filter if search_query is not empty
-                    if search_query_lower and search_query_lower not in filename.lower():
-                        continue
-                    
-                    file_size = obj['Size']
-                    file_ext = self.get_file_extension(filename)
-                    upload_date = metadata.get(filename, {}).get('upload_date', '')
-                    
-                    files.append({
-                        'name': filename,
-                        'size': file_size,
-                        'extension': file_ext,
-                        'upload_date': upload_date
-                    })
-        except ClientError as e:
-            logger.error(f"Error listing files from S3: {e}")
+            for blob in blobs:
+                filename = blob.name
+                
+                # Skip metadata file
+                if filename == self.metadata_key:
+                    continue
+                
+                # Search filter - only filter if search_query is not empty
+                if search_query_lower and search_query_lower not in filename.lower():
+                    continue
+                
+                file_size = blob.size or 0
+                file_ext = self.get_file_extension(filename)
+                upload_date = metadata.get(filename, {}).get('upload_date', '')
+                
+                files.append({
+                    'name': filename,
+                    'size': file_size,
+                    'extension': file_ext,
+                    'upload_date': upload_date
+                })
+        except Exception as e:
+            logger.error(f"Error listing files from Firebase Storage: {e}")
         
         # Sort files
         sort_key = self._get_sort_key(sort_by)
@@ -167,13 +145,13 @@ class FileService:
             return False, 'File size is required', None
 
         if file_size > Config.MAX_FILE_SIZE:
-            max_mb = Config.MAX_FILE_SIZE / (1024 * 1024)
-            return False, f'File too large. Maximum size is {max_mb:.0f}MB', None
+            max_gb = Config.MAX_FILE_SIZE / (1024 * 1024 * 1024)
+            return False, f'File too large. Maximum size is {max_gb:.0f}GB', None
 
         return True, '', sanitized_name
 
     def upload_file(self, file: FileStorage) -> Tuple[bool, str]:
-        """Upload a file to S3 with upload date as object metadata."""
+        """Upload a file to Firebase Storage with upload date as custom metadata."""
         try:
             if not file or file.filename == '':
                 return False, 'No file selected'
@@ -181,77 +159,63 @@ class FileService:
             filename = secure_filename(file.filename)
             upload_date = self._current_iso_timestamp()
             
-            # Upload file to S3 with metadata
-            self.s3_client.upload_fileobj(
-                file,
-                self.bucket_name,
-                filename,
-                ExtraArgs={
-                    'ContentType': file.content_type,
-                    'Metadata': {
-                        'upload_date': upload_date
-                    }
-                }
-            )
-            logger.info(f"File uploaded successfully to S3 with metadata: {filename}")
+            # Upload file to Firebase Storage with metadata
+            blob = self.bucket.blob(filename)
+            blob.upload_from_file(file, content_type=file.content_type or 'application/octet-stream')
+            blob.metadata = {'upload_date': upload_date}
+            blob.patch()
+            logger.info(f"File uploaded successfully to Firebase Storage with metadata: {filename}")
             
             return True, f'File "{filename}" uploaded successfully'
             
         except RequestEntityTooLarge:
-            max_mb = Config.MAX_FILE_SIZE / (1024 * 1024)
-            return False, f'File too large. Maximum size is {max_mb:.0f}MB'
-        except ClientError as e:
-            logger.error(f"Error uploading file to S3: {e}")
-            return False, f'Error uploading file to S3: {str(e)}'
+            max_gb = Config.MAX_FILE_SIZE / (1024 * 1024 * 1024)
+            return False, f'File too large. Maximum size is {max_gb:.0f}GB'
         except Exception as e:
-            logger.error(f"Error uploading file: {e}")
-            return False, f'Error uploading file: {str(e)}'
+            logger.error(f"Error uploading file to Firebase Storage: {e}")
+            return False, f'Error uploading file to Firebase Storage: {str(e)}'
     
     def file_exists(self, filename: str) -> bool:
-        """Check if a file exists in S3."""
+        """Check if a file exists in Firebase Storage."""
         filename = secure_filename(filename)
         try:
-            self.s3_client.head_object(Bucket=self.bucket_name, Key=filename)
-            return True
-        except ClientError:
+            return self.bucket.blob(filename).exists()
+        except Exception:
             return False
     
     def download_file(self, filename: str) -> Tuple[bool, Optional[Any], str]:
-        """Download a file from S3 and return the file stream and content type."""
+        """Download a file from Firebase Storage and return the file stream and content type."""
         filename = secure_filename(filename)
         try:
-            response = self.s3_client.get_object(
-                Bucket=self.bucket_name,
-                Key=filename
-            )
-            file_stream = response['Body']
-            content_type = response.get('ContentType', 'application/octet-stream')
-            logger.info(f'File downloaded from S3: {filename}')
-            return True, file_stream, content_type
-        except ClientError as e:
-            logger.error(f'Error downloading from S3: {e}')
+            blob = self.bucket.blob(filename)
+            if not blob.exists():
+                return False, None, 'File not found'
+            data = blob.download_as_bytes()
+            content_type = blob.content_type or 'application/octet-stream'
+            logger.info(f'File downloaded from Firebase Storage: {filename}')
+            return True, io.BytesIO(data), content_type
+        except Exception as e:
+            logger.error(f'Error downloading from Firebase Storage: {e}')
             return False, None, str(e)
     
     def delete_file(self, filename: str) -> Tuple[bool, str]:
-        """Delete a file from S3 (metadata is automatically removed with the file)."""
+        """Delete a file from Firebase Storage (metadata is automatically removed with the file)."""
         try:
             filename = secure_filename(filename)
             
-            if not self.file_exists(filename):
+            blob = self.bucket.blob(filename)
+            if not blob.exists():
                 return False, 'File not found'
             
-            # Delete file from S3 (metadata is stored with the file, so it's removed automatically)
-            self.s3_client.delete_object(Bucket=self.bucket_name, Key=filename)
-            logger.info(f"File deleted successfully from S3: {filename}")
+            # Delete file from Firebase Storage (metadata is stored with the file, so it's removed automatically)
+            blob.delete()
+            logger.info(f"File deleted successfully from Firebase Storage: {filename}")
             
             return True, f'File "{filename}" deleted successfully'
             
-        except ClientError as e:
-            logger.error(f"Error deleting file from S3: {e}")
-            return False, f'Error deleting file from S3: {str(e)}'
         except Exception as e:
-            logger.error(f"Error deleting file: {e}")
-            return False, f'Error deleting file: {str(e)}'
+            logger.error(f"Error deleting file from Firebase Storage: {e}")
+            return False, f'Error deleting file from Firebase Storage: {str(e)}'
     
     def generate_presigned_url(
         self,
@@ -260,69 +224,52 @@ class FileService:
         upload_date: Optional[str] = None,
         expiration: Optional[int] = None
     ) -> Tuple[bool, Optional[str], Optional[Dict[str, str]], Optional[str]]:
-        """Generate a presigned URL and headers for uploading a file directly to S3."""
+        """Generate a signed URL and headers for uploading a file directly to Firebase Storage."""
         try:
             sanitized_name = secure_filename(filename)
             normalized_content_type = content_type or 'application/octet-stream'
             timestamp = upload_date or self._current_iso_timestamp()
 
-            presigned_url = self.s3_client.generate_presigned_url(
-                'put_object',
-                Params={
-                    'Bucket': self.bucket_name,
-                    'Key': sanitized_name,
-                    'ContentType': normalized_content_type,
-                    'Metadata': {
-                        'upload_date': timestamp
-                    }
-                },
-                ExpiresIn=expiration or Config.PRESIGNED_URL_EXPIRATION
+            blob = self.bucket.blob(sanitized_name)
+            presigned_url = blob.generate_signed_url(
+                version='v4',
+                expiration=timedelta(seconds=expiration or Config.PRESIGNED_URL_EXPIRATION),
+                method='PUT',
+                content_type=normalized_content_type,
+                headers={'x-goog-meta-upload_date': timestamp}
             )
 
             headers = {
                 'Content-Type': normalized_content_type,
-                'x-amz-meta-upload_date': timestamp
+                'x-goog-meta-upload_date': timestamp
             }
 
-            logger.info(f"Generated presigned URL for: {sanitized_name}")
+            logger.info(f"Generated signed URL for: {sanitized_name}")
             return True, presigned_url, headers, sanitized_name
 
-        except ClientError as e:
-            logger.error(f"Error generating presigned URL: {e}")
-            return False, None, None, None
         except Exception as e:
-            logger.error(f"Error generating presigned URL: {e}")
+            logger.error(f"Error generating signed URL: {e}")
             return False, None, None, None
     
     def configure_cors(self, allowed_origins: List[str] = None) -> Tuple[bool, str]:
-        """Configure CORS policy for the S3 bucket to allow cross-origin requests."""
+        """Configure CORS policy for the Firebase Storage bucket to allow cross-origin requests."""
         if allowed_origins is None:
             allowed_origins = ['*']  # Allow all origins by default
         
-        cors_configuration = {
-            'CORSRules': [
-                {
-                    'AllowedHeaders': ['*'],
-                    'AllowedMethods': ['PUT', 'POST', 'GET', 'DELETE', 'HEAD', 'OPTIONS'],
-                    'AllowedOrigins': allowed_origins,
-                    'ExposeHeaders': ['ETag'],
-                    'MaxAgeSeconds': 3600
-                }
-            ]
-        }
+        cors_configuration = [
+            {
+                'origin': allowed_origins,
+                'method': ['PUT', 'POST', 'GET', 'DELETE', 'HEAD', 'OPTIONS'],
+                'responseHeader': ['ETag', 'Content-Type'],
+                'maxAgeSeconds': 3600
+            }
+        ]
         
         try:
-            # Try standard S3 CORS configuration first
-            self.s3_client.put_bucket_cors(
-                Bucket=self.bucket_name,
-                CORSConfiguration=cors_configuration
-            )
-            logger.info(f"CORS configuration updated for bucket: {self.bucket_name}")
+            self.bucket.cors = cors_configuration
+            self.bucket.patch()
+            logger.info(f"CORS configuration updated for bucket: {Config.FIREBASE_STORAGE_BUCKET}")
             return True, 'CORS configuration updated successfully'
-        except ClientError as e:
-            # If standard CORS fails, bucket might be S3 Express One Zone which doesn't support CORS the same way
-            logger.error(f"Error configuring CORS (bucket might be S3 Express One Zone): {e}")
-            return False, f'CORS not supported by this bucket type. Use backend proxy instead.'
         except Exception as e:
             logger.error(f"Error configuring CORS: {e}")
             return False, f'Error configuring CORS: {str(e)}'

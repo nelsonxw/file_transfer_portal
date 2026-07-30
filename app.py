@@ -4,7 +4,6 @@ from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, session, send_file, flash, Response, jsonify
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
-from botocore.exceptions import ClientError
 
 from config import Config, setup_logging
 from services import FileService, AuthService
@@ -102,7 +101,7 @@ def api_files() -> Response:
 @app.route('/api/presigned-url', methods=['POST'])
 @login_required
 def get_presigned_url() -> Response:
-    """API endpoint to generate presigned URL for direct S3 upload."""
+    """API endpoint to generate signed URL for direct Firebase Storage upload."""
     payload = request.get_json(silent=True) or {}
     filename = payload.get('filename')
     content_type = payload.get('contentType')
@@ -129,7 +128,7 @@ def get_presigned_url() -> Response:
 @app.route('/api/upload-proxy', methods=['POST'])
 @login_required
 def upload_proxy() -> Response:
-    """API endpoint to proxy file upload to S3 (bypasses CORS and Vercel limits)."""
+    """API endpoint to proxy file upload to Firebase Storage (bypasses CORS and Vercel limits)."""
     try:
         if 'file' not in request.files:
             return jsonify({'error': 'No file provided'}), 400
@@ -147,7 +146,7 @@ def upload_proxy() -> Response:
 
 @app.route('/api/configure-cors', methods=['POST'])
 def configure_cors() -> Response:
-    """API endpoint to configure S3 bucket CORS policy."""
+    """API endpoint to configure Firebase Storage bucket CORS policy."""
     allowed_origins = request.json.get('allowed_origins', ['*'])
     success, message = file_service.configure_cors(allowed_origins)
     if success:
@@ -179,7 +178,7 @@ def upload_file() -> Response:
         return redirect(url_for('dashboard'))
     except RequestEntityTooLarge as e:
         logger.error(f"RequestEntityTooLarge exception: {e}")
-        flash('File too large. Maximum size is 100MB.', 'error')
+        flash(f'File too large. Maximum size is {Config.MAX_FILE_SIZE / (1024 * 1024 * 1024):.0f}GB.', 'error')
         return redirect(url_for('dashboard'))
     except Exception as e:
         logger.error(f"Unexpected error during upload: {e}")
@@ -189,7 +188,7 @@ def upload_file() -> Response:
 @app.route('/download/<filename>')
 @login_required
 def download_file(filename: str) -> Response:
-    """Handle file download from S3."""
+    """Handle file download from Firebase Storage."""
     filename = secure_filename(filename)
     
     if not file_service.file_exists(filename):
